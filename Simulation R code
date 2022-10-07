@@ -1,0 +1,568 @@
+## Simulation function to MRR data analysis
+## June 2021, JABES paper
+## Survival age and time dependent, p - age dependent, gamma - constant
+
+# Annual number of newly marked individuals
+n.occasions <- 10
+n.marked <- rep(3200,9) 
+
+# Define a vector with the occasion of marking
+mark.occ <- rep(1:length(n.marked), n.marked[1:length(n.marked)])
+
+## States and CH matrix
+a <- recov <- CH <- matrix(0,ncol=n.occasions, nrow = sum(n.marked))
+z <- matrix(0,ncol=n.occasions, nrow = sum(n.marked))
+r <- c(0,rep(0.02,(n.occasions-1))) 
+gamma <- c(rep(0.20,n.occasions)) 
+beta <- c(0.53,1.91,1.32,1.59, -0.26, 0.73, 0.35, 0.45,0.69,1.10)
+
+# Age matrices (until 4+)
+S <- alpha <- matrix(NA, ncol = dim(CH)[2], nrow = sum(n.marked))
+p <- matrix(NA, ncol = dim(CH)[2], nrow = sum(n.marked))
+
+vec.age.alpha <- c(0, 1.43, 1.70, rep(2.01,n.occasions-3))
+vec.age.p <- c(1,0.06, 0.27, 0.38, rep(0.37, n.occasions-2))
+f.inverse <- (dim(CH)[2]+1) - mark.occ
+
+for (i in 1:sum(dim(CH)[1])){
+  alpha[i,mark.occ[i]:dim(p)[2]] <- vec.age.alpha[1:f.inverse[i]] 
+  p[i,mark.occ[i]:dim(p)[2]] <- vec.age.p[1:f.inverse[i]] 
+}
+
+# Simulation function
+simul.MRR <- function(z, a, recov, n.marked, alpha=alpha, beta=beta, gamma=gamma, r=r, p=p){
+  for (i in 1:sum(n.marked)){
+    CH[i,mark.occ[i]] <- 1
+    z[i,mark.occ[i]] <- 1
+    a[i,mark.occ[i]] <- 1
+    recov[i,mark.occ[i]] <- 1 # ringing time for RR database
+    for (t in (mark.occ[i]): (n.occasions-1)){
+      S[i,t]=(exp(alpha[i,t]+beta[t])/(1+exp(alpha[i,t]+beta[t])))
+      ## Alive at next period
+      z[i,t+1] <- rbinom(1,1, z[i,t]*S[i,t])
+      ## Recovered
+      recov[i,t+1] <- rbinom(1,1, z[i,t]*(1-z[i,t+1])*r[t+1])
+      if(recov[i,t+1]==1) {
+        CH[i,t+1] <- 2
+        break}
+      ## Available for capture
+      a[i,t+1] <- rbinom(1,1,z[i,t+1]*a[i,t]*(1-gamma[t]))
+      ## Captured
+      CH[i,t+1] <- rbinom(1,1, a[i,t+1]*p[i,t+1])
+    }
+    print(t)
+  }
+  out <- list(z=z,a=a,CH=CH,recov=recov)
+}
+
+## Execute function
+set.seed(100)
+
+for (s in 2:50){
+  sim.MRR <- simul.MRR(z, a, recov, n.marked, alpha=alpha, beta=beta, gamma=gamma, r=r, p=p)
+}
+
+### CREATING INTEGRATED M-ARRAYS
+CR <- sim.MRR$CH
+RR <- sim.MRR$recov
+  
+ID <- c(1: (dim(CR)[1]))
+CR.ID <- cbind(ID, CR)
+RR.ID <- cbind(ID, RR)
+  
+## Individuals seen at both
+## First all the recovered
+num.recov <- data.frame(table(rowSums(RR.ID[,-1])-1)) # 302 recovered indiv
+  
+## Seen both recaptured and recovered
+recov.ind <- data.frame(RR.ID[rowSums(RR.ID[,-1])>1,])
+temp1 <- CR.ID[recov.ind$ID,]
+  
+## The only recovered dead
+times <- as.numeric()
+for (i in 1:dim(temp1)[1]){
+  times[i] <- sum(temp1[i,(2:dim(temp1)[2])])
+}
+  
+only.recov <- temp1[which(times==3),] # 290
+both <- as.data.frame(temp1[which(times>3),]) # 12
+  
+## Remove the individuals seen at both from the RR database
+RR.uniq <- RR.ID[-both$ID,]
+  
+### INTEGRATED M-ARRAYS
+## Function to create the age m-arrays
+source("~/Dropbox/Simulation_study/OK/Functions.R")
+  
+## CR PART
+## Remove ID and 2's
+CR.ID[CR.ID==2] <- 0
+CH <- as.matrix(CR.ID[,-1])
+n.occasions <- dim(CH)[2]
+  
+## Age m-array's
+CR.marr1 <- marray.age(CH)[,,1]
+CR.marr2 <- marray.age(CH)[,,2]
+CR.marr3 <- marray.age(CH)[,,3]
+CR.marr4 <- marray.age(CH)[,,4]
+  
+## RR part
+## Remove ID
+CH <- as.matrix(RR.uniq[,-1])
+
+## RR Age m-array's, only age 1 (the rest are 0's, we build them later)
+RR.marr1 <- marray.age(CH)[,,1]
+RR.marr2 <- marray.age(CH)[,,2]
+RR.marr3 <- marray.age(CH)[,,3]
+RR.marr4 <- marray.age(CH)[,,4]
+  
+## We fix the last column to zero for age 2 to 4
+RR.marr2[,10] <- 0
+RR.marr3[,10] <- 0
+RR.marr4[,10] <- 0
+
+## Check if we have all the recoveries
+sum(rowSums(RR.marr1[,-10]))
+  
+## Seen at both
+## Trick: if we construct the m-arrays we can include that info
+## in the RR m-arrays
+## The both matrix has 1's and 2's
+CH <- as.matrix(both[,-1])
+  
+both.marr2 <- marray.age(CH)[,,2]
+both.marr3 <- marray.age(CH)[,,3]
+both.marr4 <- marray.age(CH)[,,4]
+  
+## Fix the last column to zero
+both.marr2[,10] <- 0
+both.marr3[,10] <- 0
+both.marr4[,10] <- 0
+  
+## Delete the never seen column in CR
+CR.marr1b <- CR.marr1[,-10]
+CR.marr2b <- CR.marr2[,-10]
+CR.marr3b <- CR.marr3[,-10]
+CR.marr4b <- CR.marr4[,-10]
+  
+## We merge together CR and RR
+## Info only for age 1, in ages 2,3,4+ the RR marrays are zeros
+int.marr1 <- cbind(CR.marr1b,RR.marr1)
+int.marr2 <- cbind(CR.marr2b,both.marr2)
+int.marr3 <- cbind(CR.marr3b,both.marr3)
+int.marr4 <- cbind(CR.marr4b,both.marr4)
+  
+## The never seen column
+RR_age1 <- rowSums(RR.marr1[,-10]) # The total of indiv recovered
+never_age1 <- CR.marr1[,10]- RR_age1
+
+int.marr1[,19] <- never_age1
+int.marr2[,19] <- CR.marr2[,10]
+int.marr3[,19] <- CR.marr3[,10]
+int.marr4[,19] <- CR.marr4[,10]
+
+## MRR model for simulated databases
+#####################################
+### Packages 
+library(rjags)
+library(R2jags)
+library(ggplot2)
+library(xtable)
+library(dclone)
+library(foreach)
+library(doParallel)
+library(splitstackshape)
+library(purrr) 
+library(MCMCvis)
+library(msm)
+library(parallel)
+
+### Integrated m-arrays
+marr1 <- as.matrix(int.marr1)
+marr2 <- as.matrix(int.marr2)
+marr3 <- as.matrix(int.marr3)
+marr4 <- as.matrix(int.marr4)
+  
+## Parameters 
+int.occ <- dim(marr1)[2] 
+lim <- 9 
+  
+## Parallelization
+n.cores <- 3
+  
+### Model ----
+  
+sink("MRR_sim.jags")
+  cat("
+    model{
+    
+    ## CR and RR marrays
+    for (t in 1:(int.occ-1)){
+    p1[t] <- mean.p1
+    p2[t] <- mean.p2
+    p3[t] <- mean.p3
+    p4[t] <- mean.p4
+    }
+    
+    ## CR and RR marrays
+    for (t in 1:(int.occ-1)){
+    gamma[t] <- mean.gamma
+    }
+    
+    mean.gamma ~ dunif(0,1)
+    mean.p1 ~ dunif(0,1)
+    mean.p2 ~ dunif(0,1)
+    mean.p3 ~ dunif(0,1)
+    mean.p4 ~ dunif(0,1)
+    
+    ## CR and RR marrays
+    for (t in 1: (int.occ-1)){
+    for (u in 1:4){
+    logit(s[u,t]) <- alpha[u]+ beta[t]
+    }    
+    rv[t] <- mean.rv
+    }
+    
+    mean.rv ~ dunif(0,1)
+    
+    ## To avoid lack of identifiability in last two parameters:   
+    alpha[1] <- 0 
+    #############
+    
+    for (u in 2:4){
+    alpha[u] ~ dnorm(0,0.1)
+    }
+    
+    ## The same years
+    beta[1] <- mean.beta1
+    beta[2] <- mean.beta2
+    beta[3] <- mean.beta3
+    beta[4] <- mean.beta4
+    beta[5] <- mean.beta5
+    beta[6] <- mean.beta6
+    beta[7] <- mean.beta7
+    beta[8] <- mean.beta8
+    beta[9] <- mean.beta9
+    
+    beta[10] <- mean.beta1
+    beta[11] <- mean.beta2
+    beta[12] <- mean.beta3
+    beta[13] <- mean.beta4
+    beta[14] <- mean.beta5
+    beta[15] <- mean.beta6
+    beta[16] <- mean.beta7
+    beta[17] <- mean.beta8
+    beta[18] <- mean.beta9
+    
+    mean.beta1 ~ dnorm(0,0.1)
+    mean.beta2 ~ dnorm(0,0.1)
+    mean.beta3 ~ dnorm(0,0.1)
+    mean.beta4 ~ dnorm(0,0.1)
+    mean.beta5 ~ dnorm(0,0.1)
+    mean.beta6 ~ dnorm(0,0.1)
+    mean.beta7 ~ dnorm(0,0.1)
+    mean.beta8 ~ dnorm(0,0.1)
+    mean.beta9 ~ dnorm(0,0.1)
+    
+    for (t in 1:(lim)){
+      marr1[t,1:int.occ] ~ dmulti(pr1[t,], r1[t])
+      marr2[t,1:int.occ] ~ dmulti(pr2[t,], r2[t])
+      marr3[t,1:int.occ] ~ dmulti(pr3[t,], r3[t])
+      marr4[t,1:int.occ] ~ dmulti(pr4[t,], r4[t])
+    }
+    
+    
+    ## CR
+    ## Main diagonal
+    for (t in 1: (int.occ-1)){
+      q1[t] <- 1-p1[t]
+      q2[t] <- 1-p2[t]
+      q3[t] <- 1-p3[t]
+      q4[t] <- 1-p4[t]
+      w[t] <- 1-gamma[t]
+    }
+    for (t in 1:lim){
+      pr1[t,t] <- (w[t])*s[1,t]*p1[t]
+      pr2[t,t] <- (w[t])*s[2,t]*p2[t]
+      pr3[t,t] <- (w[t])*s[3,t]*p3[t]
+      pr4[t,t] <- (w[t])*s[4,t]*p4[t]
+    }
+    
+    # Above main diagonal
+    # t+1
+    for (t in 1:(lim-1)){ 
+      pr1[t,t+1] <- (w[t])*s[1,t]*q1[t]*(w[t+1])*s[2,t+1]*p2[t+1]
+      pr2[t,t+1] <- (w[t])*s[2,t]*q2[t]*(w[t+1])*s[3,t+1]*p3[t+1]
+      pr3[t,t+1] <- (w[t])*s[3,t]*q3[t]*(w[t+1])*s[4,t+1]*p4[t+1]
+      pr4[t,t+1] <- (w[t])*s[4,t]*q4[t]*(w[t+1])*s[4,t+1]*p4[t+1]
+    } 
+    
+    ## t+2  
+    for (t in 1:(lim-2)){ 
+    pr1[t,t+2] <- (w[t])*s[1,t]*q1[t]*(w[t+1])*s[2,t+1]*q2[t+1]*(w[t+2])*s[3,t+2]*p3[t+2]
+    pr2[t,t+2] <- (w[t])*s[2,t]*q2[t]*(w[t+1])*s[3,t+1]*q3[t+1]*(w[t+2])*s[4,t+2]*p4[t+2]
+    pr3[t,t+2] <- (w[t])*s[3,t]*q3[t]*(w[t+1])*s[4,t+1]*q4[t+1]*(w[t+2])*s[4,t+2]*p4[t+2]
+    }
+    for (t in 1:(lim-2)){
+    for (j in (t+2):lim){ 
+    pr4[t,j] <- prod(w[t:j])*prod(s[4,t:j])* prod(q4[t:(j-1)])*p4[j]
+    }
+    }
+    
+    ### t+3 
+    for (t in 1:(lim-3)){ 
+    pr1[t,t+3] <- (w[t])*s[1,t]*q1[t]*(w[t+1])*s[2,t+1]*q2[t+1]*(w[t+2])*s[3,t+2]*q3[t+2]*(w[t+3])*s[4,t+3]*p4[t+3]
+    pr2[t,t+3] <- (w[t])*s[2,t]*q2[t]*(w[t+1])*s[3,t+1]*q3[t+1]*(w[t+2])*s[4,t+2]*q4[t+2]*(w[t+3])*s[4,t+3]*p4[t+3]
+    }
+    for (t in 1:(lim-3)){ 
+    for (j in (t+3):lim){ 
+    pr3[t,j] <- (w[t])*s[3,t]*q3[t]*prod(w[(t+1):j])*prod(s[4,(t+1):j])*prod(q4[(t+1):(j-1)])*p4[j]
+    }
+    }
+    
+    ## t+4
+    for (t in 1:(lim-4)){ 
+    pr1[t,t+4] <- (w[t])*s[1,t]*q1[t]*(w[t+1])*s[2,t+1]*q2[t+1]*(w[t+2])*s[3,t+2]*q3[t+2]*(w[t+3])*s[4,t+3]*q4[t+3]*(w[t+4])*s[4,t+4]*p4[t+4]
+    }
+    
+    for (t in 1:(lim-4)){ 
+    for (j in (t+4):lim){ 
+    pr2[t,j] <- (w[t])*s[2,t]*q2[t]*(w[t+1])*s[3,t+1]*q3[t+1]*prod(w[(t+2):j])*prod(s[4,(t+2):j])*prod(q4[(t+2):(j-1)])*p4[j]
+    }
+    }
+    
+    ## t+5
+    for (t in 1:(lim-5)){
+    for (j in (t+5):lim){ 
+    pr1[t,j] <- (w[t])*s[1,t]*q1[t]*(w[t+1])*s[2,t+1]*q2[t+1]*(w[t+2])*s[3,t+2]*q3[t+2]*prod(w[(t+3):j])*prod(s[4,(t+3):j])*prod(q4[(t+3):(j-1)])*p4[j]
+    }
+    }
+    
+    # Below main diagonal
+    ## CR
+    for (t in 1:lim){
+      for (j in 1:(t-1)){
+        pr1[t,j] <- 0
+        pr2[t,j] <- 0
+        pr3[t,j] <- 0
+        pr4[t,j] <- 0
+      }
+    }
+    
+    ## RING-RECOVERY
+    ## M-ARRAY 1
+    ## Main diagonal
+    for (t in 1:(lim)){
+      pr1[t,(t+lim)] <- (1-s[1,(t+lim)])*rv[(t+lim)]
+    }
+    ## Above main diagonal
+    ## t+1
+    for (t in 1:(lim-1)){
+    pr1[t,(t+lim+1)] <- ((1-s[2,t+lim+1])*rv[(t+lim+1)])*(s[1,t+lim]*(w[t+lim])*q1[(t+lim)]+ s[1,t+lim]*gamma[t+lim])
+    }
+    ## t+2
+    for (t in 1:(lim-2)){
+    pr1[t,(t+lim+2)] <- ((1-s[3,(t+lim+2)])*rv[(t+lim+2)])*(s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*(w[t+lim+1])*q2[t+lim+1] + s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*gamma[t+lim+1]+ s[1,t+lim]*gamma[t+lim]*s[2,t+lim+1])
+    }
+    ## t+3
+    for (t in 1:(lim-3)){ 
+    pr1[t,(t+lim+3)] <- (1-s[4,t+lim+3])*rv[t+lim+3]*((s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*(w[t+lim+1])*q2[t+lim+1]*s[3,(t+lim+2)]*(w[t+lim+2])*q3[t+lim+2])+ (gamma[t+lim]*s[1,t+lim]*s[2,t+lim+1]*s[3,(t+lim+2)])+(s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*(w[t+lim+1])*q2[t+lim+1]*s[3,(t+lim+2)]*gamma[t+lim+2])+ (s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*gamma[t+lim+1]*s[3,(t+lim+2)]))
+    }
+    ## t+4
+    for (t in 1:(lim-4)){
+    pr1[t,(t+lim+4)] <- ((1-s[4,t+lim+4])*rv[t+lim+4])*((s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*(w[t+lim+1])*q2[t+lim+1]*s[3,t+lim+2]*(w[t+lim+2])*q3[t+lim+2]*s[4,(t+lim+3)]*(w[t+lim+3])*q4[t+lim+3])+(s[1,t+lim]*s[2,t+lim+1]*s[3,t+lim+2]*s[4,t+lim+3]*gamma[t+lim])+ (s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*(w[t+lim+1])*q2[t+lim+1]*s[3,t+lim+2]*(w[t+lim+2])*q3[t+lim+2]*s[4,t+lim+3]*gamma[t+lim+3])+ (s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*(w[t+lim+1])*q2[t+lim+1]*s[3,t+lim+2]*gamma[t+lim+2]*s[4,t+lim+3])+ (s[1,t+lim]*(w[t+lim])*q1[t+lim]*s[2,t+lim+1]*gamma[t+lim+1]*s[3,t+lim+2]*s[4,t+lim+3]))
+    }
+    # t+5: to the end
+    for (t in 1:(lim-5)){
+    for (j in (t+lim+5):(int.occ-1)){
+    part1a[t,j] <- (1-s[4,j])*rv[j]*(s[1,t+lim]*s[2,t+lim+1]*s[3,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(gamma[t+lim] + ((w[t+lim])*q1[t+lim]*(w[t+lim+1])*q2[t+lim+1]*(w[t+lim+2])*q3[t+lim+2]*prod(q4[(t+lim+3):(j-1)])*prod(w[(t+lim+3):(j-1)])) + (q1[t+lim]*(w[t+lim])*gamma[t+lim+1])+ (q1[t+lim]*(w[t+lim])*q2[t+lim+1]*(w[t+lim+1])*gamma[t+lim+2]) + (w[t+lim]*q1[t+lim]*w[t+lim+1]*q2[t+lim+1]*w[t+lim+2]*q3[t+lim+2]*gamma[t+lim+3])) )
+    for (a in (t+lim+4):(j-1)){
+    bit1[t,j,a] <- gamma[a]* w[t+lim]*q1[t+lim]*w[t+lim+1]*q2[t+lim+1]*w[t+lim+2]*q3[t+lim+2]*prod(q4[(t+lim+3):(a-1)])*prod(w[(t+lim+3):(a-1)])
+    }
+    part1b[t,j] <- (1-s[4,j])*rv[j]*(s[1,t+lim]*s[2,t+lim+1]*s[3,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(sum(bit1[t,j,(t+lim+4):(j-1)])) )
+    pr1[t,j] <- part1a[t,j] + part1b[t,j]
+    }
+    }
+    
+    ## M-ARRAY AGE 2
+    ## Zero's in first row
+    for (j in (lim+1):(int.occ-1)){
+      pr2[1,j] <- 0
+    }
+    
+    ## Main diagonal
+    for (t in 2:(lim)){
+      pr2[t,(t+lim)] <- (1-s[2,(t+lim)])*rv[(t+lim)]
+    }
+    ## Above main diagonal
+    ## t+1
+    for (t in 2:(lim-1)){
+    pr2[t,(t+lim+1)] <- ((1-s[3,t+lim+1])*rv[(t+lim+1)])*(s[2,t+lim]*(w[t+lim])*q2[(t+lim)]+ s[2,t+lim]*gamma[t+lim])
+    }
+    ## t+2
+    for (t in 2:(lim-2)){
+    pr2[t,(t+lim+2)] <- ((1-s[4,(t+lim+2)])*rv[(t+lim+2)])*(s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*(w[t+lim+1])*q3[t+lim+1] + s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*gamma[t+lim+1]+ s[2,t+lim]*gamma[t+lim]*s[3,t+lim+1])
+    }
+    ## t+3
+    for (t in 2:(lim-3)){ 
+    pr2[t,(t+lim+3)] <- (1-s[4,t+lim+3])*rv[t+lim+3]*((s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*(w[t+lim+1])*q3[t+lim+1]*s[4,(t+lim+2)]*(w[t+lim+2])*q4[t+lim+2])+ (gamma[t+lim]*s[2,t+lim]*s[3,t+lim+1]*s[4,(t+lim+2)])+(s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*(w[t+lim+1])*q3[t+lim+1]*s[4,(t+lim+2)]*gamma[t+lim+2])+ (s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*gamma[t+lim+1]*s[4,(t+lim+2)]))
+    }
+    ## t+4
+    for (t in 2:(lim-4)){
+    pr2[t,(t+lim+4)] <- ((1-s[4,t+lim+4])*rv[t+lim+4])*((s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*(w[t+lim+1])*q3[t+lim+1]*s[4,t+lim+2]*(w[t+lim+2])*q4[t+lim+2]*s[4,(t+lim+3)]*(w[t+lim+3])*q4[t+lim+3])+(s[2,t+lim]*s[3,t+lim+1]*s[4,t+lim+2]*s[4,t+lim+3]*gamma[t+lim])+ (s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*(w[t+lim+1])*q3[t+lim+1]*s[4,t+lim+2]*(w[t+lim+2])*q4[t+lim+2]*s[4,t+lim+3]*gamma[t+lim+3])+ (s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*(w[t+lim+1])*q3[t+lim+1]*s[4,t+lim+2]*gamma[t+lim+2]*s[4,t+lim+3])+ (s[2,t+lim]*(w[t+lim])*q2[t+lim]*s[3,t+lim+1]*gamma[t+lim+1]*s[4,t+lim+2]*s[4,t+lim+3]))
+    }
+    # t+5: to the end
+    for (t in 2:(lim-5)){
+    for (j in (t+lim+5):(int.occ-1)){
+    part2a[t,j] <- (1-s[4,j])*rv[j]*(s[2,t+lim]*s[3,t+lim+1]*s[4,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(gamma[t+lim] + ((w[t+lim])*q2[t+lim]*(w[t+lim+1])*q3[t+lim+1]*(w[t+lim+2])*q4[t+lim+2]*prod(q4[(t+lim+3):(j-1)])*prod(w[(t+lim+3):(j-1)])) + (q2[t+lim]*(w[t+lim])*gamma[t+lim+1])+ (q2[t+lim]*(w[t+lim])*q3[t+lim+1]*(w[t+lim+1])*gamma[t+lim+2]) + (w[t+lim]*q2[t+lim]*w[t+lim+1]*q3[t+lim+1]*w[t+lim+2]*q4[t+lim+2]*gamma[t+lim+3])) )
+    for (a in (t+lim+4):(j-1)){
+    bit2[t,j,a] <- gamma[a]* w[t+lim]*q2[t+lim]*w[t+lim+1]*q3[t+lim+1]*w[t+lim+2]*q4[t+lim+2]*prod(q4[(t+lim+3):(a-1)])*prod(w[(t+lim+3):(a-1)])
+    }
+    part2b[t,j] <- (1-s[4,j])*rv[j]*(s[2,t+lim]*s[3,t+lim+1]*s[4,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(sum(bit2[t,j,(t+lim+4):(j-1)])) )
+    pr2[t,j] <- part2a[t,j] + part2b[t,j]
+    }
+    }
+    
+    ## MARRAY AGE 3
+    ## The first two rows
+    for (t in 1:2){
+      for (j in (lim+1):(int.occ-1)){
+        pr3[t,j] <- 0
+      }
+    }
+    
+    ## Main diagonal
+    for (t in 3:(lim)){
+      pr3[t,(t+lim)] <- (1-s[3,(t+lim)])*rv[(t+lim)]
+    }
+    ## Above main diagonal
+    ## t+1
+    for (t in 3:(lim-1)){
+    pr3[t,(t+lim+1)] <- ((1-s[4,t+lim+1])*rv[(t+lim+1)])*(s[3,t+lim]*(w[t+lim])*q3[(t+lim)]+ s[3,t+lim]*gamma[t+lim])
+    }
+    ## t+2
+    for (t in 3:(lim-2)){
+    pr3[t,(t+lim+2)] <- ((1-s[4,(t+lim+2)])*rv[(t+lim+2)])*(s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1] + s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*gamma[t+lim+1]+ s[3,t+lim]*gamma[t+lim]*s[4,t+lim+1])
+    }
+    ## t+3
+    for (t in 3:(lim-3)){ 
+    pr3[t,(t+lim+3)] <- (1-s[4,t+lim+3])*rv[t+lim+3]*((s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,(t+lim+2)]*(w[t+lim+2])*q4[t+lim+2])+ (gamma[t+lim]*s[3,t+lim]*s[4,t+lim+1]*s[4,(t+lim+2)])+(s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,(t+lim+2)]*gamma[t+lim+2])+ (s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*gamma[t+lim+1]*s[4,(t+lim+2)]))
+    }
+    ## t+4
+    for (t in 3:(lim-4)){
+    pr3[t,(t+lim+4)] <- ((1-s[4,t+lim+4])*rv[t+lim+4])*((s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,t+lim+2]*(w[t+lim+2])*q4[t+lim+2]*s[4,(t+lim+3)]*(w[t+lim+3])*q4[t+lim+3])+(s[3,t+lim]*s[4,t+lim+1]*s[4,t+lim+2]*s[4,t+lim+3]*gamma[t+lim])+ (s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,t+lim+2]*(w[t+lim+2])*q4[t+lim+2]*s[4,t+lim+3]*gamma[t+lim+3])+ (s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,t+lim+2]*gamma[t+lim+2]*s[4,t+lim+3])+ (s[3,t+lim]*(w[t+lim])*q3[t+lim]*s[4,t+lim+1]*gamma[t+lim+1]*s[4,t+lim+2]*s[4,t+lim+3]))
+    }
+    # t+5: to the end
+    for (t in 3:(lim-5)){
+    for (j in (t+lim+5):(int.occ-1)){
+    part3a[t,j] <- (1-s[4,j])*rv[j]*(s[3,t+lim]*s[4,t+lim+1]*s[4,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(gamma[t+lim] + ((w[t+lim])*q3[t+lim]*(w[t+lim+1])*q4[t+lim+1]*(w[t+lim+2])*q4[t+lim+2]*prod(q4[(t+lim+3):(j-1)])*prod(w[(t+lim+3):(j-1)])) + (q3[t+lim]*(w[t+lim])*gamma[t+lim+1])+ (q3[t+lim]*(w[t+lim])*q4[t+lim+1]*(w[t+lim+1])*gamma[t+lim+2]) + (w[t+lim]*q3[t+lim]*w[t+lim+1]*q4[t+lim+1]*w[t+lim+2]*q4[t+lim+2]*gamma[t+lim+3])) )
+    for (a in (t+lim+4):(j-1)){
+    bit3[t,j,a] <- gamma[a]* w[t+lim]*q3[t+lim]*w[t+lim+1]*q4[t+lim+1]*w[t+lim+2]*q4[t+lim+2]*prod(q4[(t+lim+3):(a-1)])*prod(w[(t+lim+3):(a-1)])
+    }
+    part3b[t,j] <- (1-s[4,j])*rv[j]*(s[3,t+lim]*s[4,t+lim+1]*s[4,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(sum(bit3[t,j,(t+lim+4):(j-1)])) )
+    pr3[t,j] <- part3a[t,j] + part3b[t,j]
+    }
+    }
+    
+    ## MARRAY 4: 
+    ## First three rows
+    for (t in 1:3){
+      for (j in (lim+1):(int.occ-1)){
+        pr4[t,j] <- 0
+      }
+    }
+    
+    ## Main diagonal
+    for (t in 4:(lim)){
+      pr4[t,(t+lim)] <- (1-s[4,(t+lim)])*rv[(t+lim)]
+    }
+    ## Above main diagonal
+    ## t+1
+    for (t in 4:(lim-1)){
+    pr4[t,(t+lim+1)] <- ((1-s[4,t+lim+1])*rv[(t+lim+1)])*(s[4,t+lim]*(w[t+lim])*q4[(t+lim)]+ s[4,t+lim]*gamma[t+lim])
+    }
+    ## t+2
+    for (t in 4:(lim-2)){
+    pr4[t,(t+lim+2)] <- ((1-s[4,(t+lim+2)])*rv[(t+lim+2)])*(s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1] + s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*gamma[t+lim+1]+ s[4,t+lim]*gamma[t+lim]*s[4,t+lim+1])
+    }
+    ## t+3
+    for (t in 4:(lim-3)){ 
+    pr4[t,(t+lim+3)] <- (1-s[4,t+lim+3])*rv[t+lim+3]*((s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,(t+lim+2)]*(w[t+lim+2])*q4[t+lim+2])+ (gamma[t+lim]*s[4,t+lim]*s[4,t+lim+1]*s[4,(t+lim+2)])+(s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,(t+lim+2)]*gamma[t+lim+2])+ (s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*gamma[t+lim+1]*s[4,(t+lim+2)]))
+    }
+    ## t+4
+    for (t in 4:(lim-4)){
+    pr4[t,(t+lim+4)] <- ((1-s[4,t+lim+4])*rv[t+lim+4])*((s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,t+lim+2]*(w[t+lim+2])*q4[t+lim+2]*s[4,(t+lim+3)]*(w[t+lim+3])*q4[t+lim+3])+(s[4,t+lim]*s[4,t+lim+1]*s[4,t+lim+2]*s[4,t+lim+3]*gamma[t+lim])+ (s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,t+lim+2]*(w[t+lim+2])*q4[t+lim+2]*s[4,t+lim+3]*gamma[t+lim+3])+ (s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*(w[t+lim+1])*q4[t+lim+1]*s[4,t+lim+2]*gamma[t+lim+2]*s[4,t+lim+3])+ (s[4,t+lim]*(w[t+lim])*q4[t+lim]*s[4,t+lim+1]*gamma[t+lim+1]*s[4,t+lim+2]*s[4,t+lim+3]))
+    }
+    # t+5: to the end
+    for (t in 4:(lim-5)){
+    for (j in (t+lim+5):(int.occ-1)){
+    part4a[t,j] <- (1-s[4,j])*rv[j]*(s[4,t+lim]*s[4,t+lim+1]*s[4,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(gamma[t+lim] + ((w[t+lim])*q4[t+lim]*(w[t+lim+1])*q4[t+lim+1]*(w[t+lim+2])*q4[t+lim+2]*prod(q4[(t+lim+3):(j-1)])*prod(w[(t+lim+3):(j-1)])) + (q4[t+lim]*(w[t+lim])*gamma[t+lim+1])+ (q4[t+lim]*(w[t+lim])*q4[t+lim+1]*(w[t+lim+1])*gamma[t+lim+2]) + (w[t+lim]*q4[t+lim]*w[t+lim+1]*q4[t+lim+1]*w[t+lim+2]*q4[t+lim+2]*gamma[t+lim+3])) )
+    for (a in (t+lim+4):(j-1)){
+    bit4[t,j,a] <- gamma[a]* w[t+lim]*q4[t+lim]*w[t+lim+1]*q4[t+lim+1]*w[t+lim+2]*q4[t+lim+2]*prod(q4[(t+lim+3):(a-1)])*prod(w[(t+lim+3):(a-1)])
+    }
+    part4b[t,j] <- (1-s[4,j])*rv[j]*(s[4,t+lim]*s[4,t+lim+1]*s[4,t+lim+2]*prod(s[4,(t+lim+3):(j-1)])*(sum(bit4[t,j,(t+lim+4):(j-1)])) )
+    pr4[t,j] <- part4a[t,j] + part4b[t,j]
+    }
+    }
+    
+    ## Below main diagonal
+    ## RR
+    ## THE OTHER MARRAYS ARE ALREADY DEFINED
+    for (t in 1:lim){
+    for (j in (lim+1):(t+lim-1)){
+    pr1[t,j] <- 0
+    }
+    }
+    for (t in 2:lim){
+    for (j in (lim+1):(t+lim-1)){
+    pr2[t,j] <- 0
+    }
+    }
+    for (t in 3:lim){
+    for (j in (lim+1):(t+lim-1)){
+    pr3[t,j] <- 0
+    }
+    }
+    for (t in 4:lim){
+    for (j in (lim+1):(t+lim-1)){
+    pr4[t,j] <- 0
+    }
+    }
+    
+    ## Last column: prob of non-recapture
+    for (t in 1:lim){
+    pr1[t,int.occ] <- 1-sum(pr1[t,1:(int.occ-1)])
+    pr2[t,int.occ] <- 1-sum(pr2[t,1:(int.occ-1)])
+    pr3[t,int.occ] <- 1-sum(pr3[t,1:(int.occ-1)])
+    pr4[t,int.occ] <- 1-sum(pr4[t,1:(int.occ-1)])
+    }
+    }
+    ", fill=TRUE)
+sink()
+  
+## Bundle data ----
+jags.data <- list(marr1=marr1 , marr2=marr2, marr3=marr3, marr4=marr4, int.occ=dim(marr1)[2], r1= rowSums(marr1), r2= rowSums(marr2), r3= rowSums(marr3), r4= rowSums(marr4),  lim=lim)
+  
+## Initial values ----
+inits <- function(){list(mean.rv=runif(1,0,1), mean.p1=runif(1,0,1), mean.p2=runif(1,0,1), mean.p3=runif(1,0,1),  mean.p4=runif(1,0,1))}
+  
+### Parameters
+parameters <- c("mean.rv", "mean.p1", "mean.p2", "mean.p3", "mean.p4", "mean.gamma", "beta", "alpha", "s")
+  
+## MCMC settings ----
+ni <- 100000
+nt <- 100
+nb <- 10000
+nc <- 3
+  
+## Call Jags 
+cl <- makePSOCKcluster(n.cores)
+tmp <- clusterEvalQ(cl, library(dclone))
+parLoadModule(cl, 'dic')
+  
+post_sim <- jags.parfit(cl = cl, data = jags.data, params = parameters, model = "MRR_sim.jags", n.chains = nc, n.adapt = 100, n.update = nb,n.iter = ni,thin = nt)
+  
+stopCluster(cl)
+  
+
+
